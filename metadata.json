@@ -1,0 +1,6 @@
+{
+  "name": "Delight Tech Network Academy",
+  "description": "Delight Tech Network Academy - Learn, Build, Launch in Ibadan, Nigeria. Includes interactive student dashboard, courses portal, and admin management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

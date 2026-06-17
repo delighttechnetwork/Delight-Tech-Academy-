@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-poppins), sans-serif;
+  --color-bg-brand: var(--brand-bg);
+  --color-bg-brand-darker: var(--brand-bg-darker);
+  --color-card-brand: var(--brand-card);
+  --color-card-brand-hover: var(--brand-card-hover);
+  --color-border-brand: var(--brand-border);
+  --color-text-brand: var(--brand-text);
+  --color-text-brand-muted: var(--brand-text-muted);
+  --color-text-brand-muted-darker: var(--brand-text-muted-darker);
+}
+
+:root {
+  --brand-bg: #0A1228;
+  --brand-bg-darker: #050a18;
+  --brand-card: #0c1630;
+  --brand-card-hover: #122147;
+  --brand-border: #111e40;
+  --brand-text: #ffffff;
+  --brand-text-muted: #94a3b8;
+  --brand-text-muted-darker: #475569;
+}
+
+:root.light {
+  --brand-bg: #f8fafc;
+  --brand-bg-darker: #f1f5f9;
+  --brand-card: #ffffff;
+  --brand-card-hover: #f1f5f9;
+  --brand-border: #e2e8f0;
+  --brand-text: #0f172a;
+  --brand-text-muted: #64748b;
+  --brand-text-muted-darker: #94a3b8;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Custom Scrollbar for Delight Academy interface theme */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--brand-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--brand-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--brand-card-hover);
+}
+
+/* Animations helpers */
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.05);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 4s infinite ease-in-out;
+}
+
