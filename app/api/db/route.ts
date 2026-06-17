@@ -1,13 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { loadDb, saveDb, Profile, Enrollment, StudentProgress, Certificate, Registration, Course, CourseStage, Category } from '@/lib/db-store';
+import { loadDb, saveDb as diskSaveDb, Profile, Enrollment, StudentProgress, Certificate, Registration, Course, CourseStage, Category } from '@/lib/db-store';
+import { getSupabaseClient, pullFromSupabase, pushToSupabase } from '@/lib/supabase';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, payload } = body;
 
-    const db = loadDb();
+    let db = loadDb();
+    const supabaseClient = getSupabaseClient();
+
+    if (supabaseClient) {
+      db = await pullFromSupabase(supabaseClient, db);
+    }
+
+    const saveDb = (updatedDb: any) => {
+      diskSaveDb(updatedDb);
+      if (supabaseClient) {
+        pushToSupabase(supabaseClient, updatedDb).catch(err => {
+          console.error('Supabase background push failure:', err);
+        });
+      }
+    };
 
     // Helper: get logged in user profile synchronously from request cookies
     const getSessionUser = (): Profile | null => {
