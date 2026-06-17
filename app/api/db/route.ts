@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { loadDb, saveDb as diskSaveDb, Profile, Enrollment, StudentProgress, Certificate, Registration, Course, CourseStage, Category } from '@/lib/db-store';
@@ -204,6 +206,27 @@ Delight Tech Network Automation Webhook
         return NextResponse.json({ success: true, message: newReg });
       }
 
+      case 'website:subscribe-newsletter': {
+        const { email } = payload;
+        
+        // Save newsletter subscriber as a contact with a "Newsletter Subscription" subject in description
+        const newReg: Registration = {
+          id: `reg-${Date.now()}`,
+          full_name: 'Newsletter Subscriber',
+          email,
+          phone: '-',
+          course_id: '',
+          message: 'Newsletter Subscription',
+          source: 'contact', // Complies with supabase source check constraints
+          status: 'new',
+          submitted_at: new Date().toISOString()
+        };
+
+        db.registrations.unshift(newReg);
+        saveDb(db);
+        return NextResponse.json({ success: true, newsletter: newReg });
+      }
+
       // --- GET INITIAL CONTENT (Courses & Categories) ---
       case 'content:get-catalog': {
         return NextResponse.json({
@@ -357,6 +380,52 @@ Delight Tech Network Automation Webhook
       }
 
       // --- ADMIN PANEL ACTIONS (GUARDED WITH ROLE ADMIN) ---
+      case 'admin:get-overall-state': {
+        const user = getSessionUser();
+        if (!user || user.role !== 'admin') {
+          return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+        }
+        return NextResponse.json({
+          profiles: db.profiles,
+          enrollments: db.enrollments,
+          registrations: db.registrations,
+          certificates: db.certificates,
+          progress: db.progress,
+          courses: db.courses,
+          course_stages: db.course_stages,
+          categories: db.categories
+        });
+      }
+
+      case 'admin:update-student-credentials': {
+        const user = getSessionUser();
+        if (!user || user.role !== 'admin') {
+          return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+        }
+
+        const { student_id, email, password } = payload;
+        const studentProfile = db.profiles.find(p => p.id === student_id && p.role === 'student');
+        if (!studentProfile) {
+          return NextResponse.json({ error: 'Student profile not found' }, { status: 404 });
+        }
+
+        if (email) {
+          // Check uniqueness
+          const emailExists = db.profiles.find(p => p.id !== student_id && p.email.toLowerCase() === email.toLowerCase());
+          if (emailExists) {
+            return NextResponse.json({ error: 'Another user already registered with this email address.' }, { status: 400 });
+          }
+          studentProfile.email = email;
+        }
+
+        if (password) {
+          studentProfile.password = password;
+        }
+
+        saveDb(db);
+        return NextResponse.json({ success: true, student: studentProfile });
+      }
+
       case 'admin:get-dashboard-stats': {
         const user = getSessionUser();
         if (!user || user.role !== 'admin') {

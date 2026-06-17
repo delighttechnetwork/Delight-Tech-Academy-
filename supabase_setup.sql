@@ -167,24 +167,51 @@ ON CONFLICT (id) DO UPDATE SET
     order_index = EXCLUDED.order_index;
 
 -- Default stages fallback generator for other courses
-INSERT INTO course_stages (id, course_id, title, description, order_index, created_at)
-SELECT 
-    'stage-' || c.id || '-' || idx AS id,
-    c.id AS course_id,
-    CASE idx 
-        WHEN 1 THEN 'Module 1: Foundational Frameworks & Essentials'
-        WHEN 2 THEN 'Module 2: Practical Exercises & Real-World Projects'
-        ELSE 'Module 3: Mastery Review, Portfolio & Capstone Examination'
-    END AS title,
-    CASE idx 
-        WHEN 1 THEN 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.'
-        WHEN 2 THEN 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.'
-        ELSE 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.'
-    END AS description,
-    idx AS order_index,
-    NOW() AS created_at
-FROM courses c, (VALUES (1), (2), (3)) AS num(idx)
-WHERE c.id NOT IN ('course-cyber', 'course-frontend-dev', 'course-ai-web')
+INSERT INTO course_stages (id, course_id, title, description, order_index, created_at) VALUES
+-- course-smartphone-design
+('stage-course-smartphone-design-1', 'course-smartphone-design', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-smartphone-design-2', 'course-smartphone-design', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-smartphone-design-3', 'course-smartphone-design', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-photoshop
+('stage-course-photoshop-1', 'course-photoshop', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-photoshop-2', 'course-photoshop', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-photoshop-3', 'course-photoshop', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-ai-graphics
+('stage-course-ai-graphics-1', 'course-ai-graphics', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-ai-graphics-2', 'course-ai-graphics', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-ai-graphics-3', 'course-ai-graphics', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-free-web
+('stage-course-free-web-1', 'course-free-web', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-free-web-2', 'course-free-web', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-free-web-3', 'course-free-web', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-fullstack-dev
+('stage-course-fullstack-dev-1', 'course-fullstack-dev', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-fullstack-dev-2', 'course-fullstack-dev', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-fullstack-dev-3', 'course-fullstack-dev', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-smartphone-video
+('stage-course-smartphone-video-1', 'course-smartphone-video', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-smartphone-video-2', 'course-smartphone-video', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-smartphone-video-3', 'course-smartphone-video', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-ai-video
+('stage-course-ai-video-1', 'course-ai-video', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-ai-video-2', 'course-ai-video', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-ai-video-3', 'course-ai-video', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-uiux
+('stage-course-uiux-1', 'course-uiux', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-uiux-2', 'course-uiux', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-uiux-3', 'course-uiux', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW()),
+
+-- course-prompt-eng
+('stage-course-prompt-eng-1', 'course-prompt-eng', 'Module 1: Foundational Frameworks & Essentials', 'Understand the basic vocabulary, system configurations, layout setups, and primary tools associated with this training.', 1, NOW()),
+('stage-course-prompt-eng-2', 'course-prompt-eng', 'Module 2: Practical Exercises & Real-World Projects', 'Engage in curated hands-on workshops. Build full physical design assets or software items based on specific customer prompts.', 2, NOW()),
+('stage-course-prompt-eng-3', 'course-prompt-eng', 'Module 3: Mastery Review, Portfolio & Capstone Examination', 'Integrate the entire toolkit. Package your assets into a professional career portfolio and complete the final Delight Tech Academy graduation checkout.', 3, NOW())
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Master Profiles (Admins & Demo Students)

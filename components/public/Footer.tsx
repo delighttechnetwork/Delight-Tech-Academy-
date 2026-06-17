@@ -22,7 +22,20 @@ function NewsletterForm() {
     setErrorMsg('');
     
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const res = await fetch('/api/db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'website:subscribe-newsletter',
+          payload: { email }
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setErrorMsg(data.error);
+        return;
+      }
+
       const savedSubs = JSON.parse(localStorage.getItem('dta_newsletter_subs') || '[]');
       if (!savedSubs.includes(email)) {
         savedSubs.push(email);
