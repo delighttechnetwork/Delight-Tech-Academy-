@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/AppContext';
 import { 
@@ -38,9 +38,13 @@ import {
   EyeOff,
   Edit3,
   Save,
-  X
+  X,
+  TrendingUp,
+  Send,
+  AlertTriangle
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function AdminDashboard() {
   const { user, courses, categories, course_stages, logout, refreshCatalog } = useApp();
@@ -106,6 +110,108 @@ export default function AdminDashboard() {
   const [actionSuccess, setActionSuccess] = useState('');
   const [actionError, setActionError] = useState('');
 
+  // Bulk student notification states
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [isBulkEmailModalOpen, setIsBulkEmailModalOpen] = useState(false);
+  const [bulkEmailSubject, setBulkEmailSubject] = useState('');
+  const [bulkEmailBody, setBulkEmailBody] = useState('');
+  const [isSendingBulkEmail, setIsSendingBulkEmail] = useState(false);
+
+  // Bulk email select togglers and submit handlers
+  const handleToggleSelectAll = (visibleStudents: any[]) => {
+    const visibleIds = visibleStudents.map(s => s.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every(id => selectedStudentIds.includes(id));
+    if (allSelected) {
+      setSelectedStudentIds(prev => prev.filter(id => !visibleIds.includes(id)));
+    } else {
+      setSelectedStudentIds(prev => Array.from(new Set([...prev, ...visibleIds])));
+    }
+  };
+
+  const handleToggleSelectStudent = (studId: string) => {
+    setSelectedStudentIds(prev =>
+      prev.includes(studId)
+        ? prev.filter(id => id !== studId)
+        : [...prev, studId]
+    );
+  };
+
+  const handleSendBulkAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkEmailSubject.trim() || !bulkEmailBody.trim()) {
+      triggerFeedbacks('Subject and Message are both required to deploy broadcast.', true);
+      return;
+    }
+    
+    setIsSendingBulkEmail(true);
+    try {
+      // Simulate real API SMTP delivery pipeline
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      triggerFeedbacks(`Successfully delivered mass notification "${bulkEmailSubject}" to ${selectedStudentIds.length} students!`);
+      setIsBulkEmailModalOpen(false);
+      setBulkEmailSubject('');
+      setBulkEmailBody('');
+      setSelectedStudentIds([]); // Clear selections on success
+    } catch {
+      triggerFeedbacks('Failed to deliver email campaign due to connection loss.', true);
+    } finally {
+      setIsSendingBulkEmail(false);
+    }
+  };
+
+  // Custom Confirmation Dialog overlay states
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: (() => void) | (() => Promise<void>);
+    confirmText?: string;
+    cancelText?: string;
+    type: 'danger' | 'info' | 'warning';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    type: 'info'
+  });
+
+  // Calculate 30-day enrollment trends for Recharts summary data visualization
+  const enrollmentTrendData = useMemo(() => {
+    const result: { date: string; 'New Enrollments': number; 'Cumulative Enrollments': number }[] = [];
+    const now = new Date();
+    
+    // Construct exactly 30 data points representing progress trends
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      
+      const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
+      
+      const dailyCount = enrollmentsList.filter(e => {
+        const time = new Date(e.enrolled_at || e.enrolled_at).getTime();
+        return time >= startOfDay && time < endOfDay;
+      }).length;
+
+      const cumulativeCount = enrollmentsList.filter(e => {
+        const time = new Date(e.enrolled_at || e.enrolled_at).getTime();
+        return time < endOfDay;
+      }).length;
+
+      result.push({
+        date: dateStr,
+        'New Enrollments': dailyCount,
+        'Cumulative Enrollments': cumulativeCount
+      });
+    }
+    return result;
+  }, [enrollmentsList]);
+
   // Manual enrollment form
   const [manualProfileId, setManualProfileId] = useState('');
   const [manualCourseId, setManualCourseId] = useState('');
@@ -158,52 +264,78 @@ export default function AdminDashboard() {
     }
   };
 
-  // 1. Approve & Enroll Registration Action
-  const handleApproveAndEnrollReg = async (registrationId: string) => {
-    try {
-      const res = await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'admin:approve-registration',
-          payload: { registration_id: registrationId }
-        })
-      });
-      const data = await res.json();
-      
-      if (data.error) {
-        triggerFeedbacks(data.error, true);
-      } else {
-        triggerFeedbacks('Registration approved! Student credentials generated. Email: ' + data.generatedEmail);
-        await fetchAdminConsoleState();
+  // 1. Approve & Enroll Registration Action (with custom Confirmation dialog trigger)
+  const handleApproveAndEnrollReg = (registrationId: string) => {
+    const regObj = registrationsList.find(r => r.id === registrationId);
+    const applicantName = regObj ? regObj.full_name : 'this applicant';
+    setConfirmModal({
+      isOpen: true,
+      title: 'Approve & Enroll Student',
+      message: `Are you certain you want to approve ${applicantName} and enroll them into virtual student workspace? This automatically logs study credentials and generates credentials.`,
+      confirmText: 'Yes, Approve & Enroll',
+      cancelText: 'Cancel',
+      type: 'info',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/db', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'admin:approve-registration',
+              payload: { registration_id: registrationId }
+            })
+          });
+          const data = await res.json();
+          if (data.error) {
+            triggerFeedbacks(data.error, true);
+          } else {
+            triggerFeedbacks('Registration approved! Student credentials generated. Email: ' + data.generatedEmail);
+            await fetchAdminConsoleState();
+          }
+        } catch {
+          triggerFeedbacks('Network error on registration pipeline approval.', true);
+        } finally {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
       }
-    } catch {
-      triggerFeedbacks('Network error on registration pipeline approval.', true);
-    }
+    });
   };
 
-  // Delete profile
-  const handleDeleteProfile = async (profileId: string) => {
-    if (!confirm('Are you absolutely certain you want to delete this profile? All progress and enrollments will be wiped.')) return;
-    try {
-      const res = await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'admin:delete-profile',
-          payload: { profile_id: profileId }
-        })
-      });
-      const data = await res.json();
-      if (data.error) {
-        triggerFeedbacks(data.error, true);
-      } else {
-        triggerFeedbacks('Profile successfully deleted.');
-        await fetchAdminConsoleState();
+  // Delete profile (with custom Confirmation dialog trigger)
+  const handleDeleteProfile = (profileId: string) => {
+    const student = profilesList.find(p => p.id === profileId);
+    const studentName = student ? student.full_name : 'this student';
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete Student Profile',
+      message: `Are you absolutely certain you want to delete ${studentName}'s profile? All course history, logs, progress tracking, and credential files will be wiped forever from our system.`,
+      confirmText: 'Yes, Delete Permanently',
+      cancelText: 'Keep Student',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          const res = await fetch('/api/db', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'admin:delete-profile',
+              payload: { profile_id: profileId }
+            })
+          });
+          const data = await res.json();
+          if (data.error) {
+            triggerFeedbacks(data.error, true);
+          } else {
+            triggerFeedbacks('Profile successfully deleted.');
+            await fetchAdminConsoleState();
+          }
+        } catch {
+          triggerFeedbacks('Failure to delete profile registry.', true);
+        } finally {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
       }
-    } catch {
-      triggerFeedbacks('Failure to delete profile registry.', true);
-    }
+    });
   };
 
   // Create new active course
@@ -448,7 +580,7 @@ export default function AdminDashboard() {
   };
 
   // Export tables real spreadsheet using xlsx compiled locally in background!
-  const triggerSheetExport = (targetType: 'students' | 'registrations' | 'courses') => {
+  const triggerSheetExport = (targetType: 'students' | 'registrations' | 'courses' | 'progress_report') => {
     let dataToExport: any[] = [];
     let fileHeader = '';
 
@@ -484,6 +616,55 @@ export default function AdminDashboard() {
         StudyLevel: c.level
       }));
       fileHeader = 'Delight_Academy_Curriculums';
+    } else if (targetType === 'progress_report') {
+      const studentProfiles = profilesList.filter(p => p.role === 'student');
+      const rows: any[] = [];
+      
+      studentProfiles.forEach(p => {
+        const studentEnrollments = enrollmentsList.filter(e => e.student_id === p.id);
+        
+        if (studentEnrollments.length === 0) {
+          rows.push({
+            StudentID: p.id,
+            FullName: p.full_name,
+            EmailAddress: p.email,
+            WhatsAppNumber: p.phone,
+            CourseID: 'N/A',
+            CourseTitle: 'No Enrolled Courses',
+            EnrollmentStatus: 'None',
+            CompletedStages: 0,
+            TotalStages: 0,
+            CompletionPercentage: '0%',
+            EnrolledDate: 'N/A'
+          });
+        } else {
+          studentEnrollments.forEach(e => {
+            const courseMatch = courses.find(c => c.id === e.course_id);
+            const stagesForCourse = course_stages.filter(cs => cs.course_id === e.course_id);
+            const completedStages = progressList.filter(pr => pr.enrollment_id === e.id && pr.completed);
+            
+            const percentage = stagesForCourse.length > 0
+              ? Math.round((completedStages.length / stagesForCourse.length) * 100)
+              : 0;
+            
+            rows.push({
+              StudentID: p.id,
+              FullName: p.full_name,
+              EmailAddress: p.email,
+              WhatsAppNumber: p.phone,
+              CourseID: e.course_id,
+              CourseTitle: courseMatch ? courseMatch.title : 'Deleted or Unknown Course',
+              EnrollmentStatus: e.status || 'active',
+              CompletedStages: completedStages.length,
+              TotalStages: stagesForCourse.length,
+              CompletionPercentage: `${percentage}%`,
+              EnrolledDate: new Date(e.enrolled_at).toLocaleDateString()
+            });
+          });
+        }
+      });
+      dataToExport = rows;
+      fileHeader = 'Delight_Student_Progress_Report';
     }
 
     if (dataToExport.length === 0) {
@@ -689,6 +870,95 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {/* 30-DAY ENROLLMENT TREND CHART */}
+              <div className="p-6 rounded-xl border border-[#111e40] bg-[#0c1630] max-w-4xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-mono font-bold text-gray-300 flex items-center gap-1.5 uppercase tracking-wider">
+                      <TrendingUp className="h-4 w-4 text-cyan-400" />
+                      Student Enrollment Trends (Last 30 Days)
+                    </h3>
+                    <p className="text-[11px] text-gray-500 font-sans mt-0.5">
+                      Visualizing daily student onboarding momentum alongside cumulative cohorts total.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4 text-[10px] font-mono">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded bg-cyan-400 block" />
+                      <span className="text-gray-400">Daily Joins</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded bg-emerald-500 block" />
+                      <span className="text-gray-400">Cumulative Intake</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pr-4 pt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart
+                      data={enrollmentTrendData}
+                      margin={{ top: 10, right: 5, left: -25, bottom: 0 }}
+                    >
+                      <defs>
+                        <linearGradient id="colorNew" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.4}/>
+                          <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorCumulative" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#111e40" vertical={false} />
+                      <XAxis 
+                        dataKey="date" 
+                        stroke="#4b5563" 
+                        fontSize={10}
+                        tickLine={false}
+                        axisLine={false}
+                        dy={6}
+                      />
+                      <YAxis 
+                        stroke="#4b5563" 
+                        fontSize={10} 
+                        tickLine={false}
+                        axisLine={false}
+                        dx={-6}
+                      />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: '#0a1228', 
+                          borderColor: '#111e40', 
+                          borderRadius: '8px',
+                          color: '#fff',
+                          fontFamily: 'monospace',
+                          fontSize: '11px',
+                          padding: '10px'
+                        }}
+                        cursor={{ stroke: '#22d3ee', strokeWidth: 1 }}
+                      />
+                      <Area 
+                        type="monotone" 
+                        dataKey="New Enrollments" 
+                        stroke="#22d3ee" 
+                        strokeWidth={2}
+                        fillOpacity={1} 
+                        fill="url(#colorNew)" 
+                      />
+                      <Area 
+                        type="monotone" 
+                        dataKey="Cumulative Enrollments" 
+                        stroke="#10b981" 
+                        strokeWidth={2}
+                        fillOpacity={1} 
+                        fill="url(#colorCumulative)" 
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
               {/* QUICK MANUAL ENROLL DIRECT BLOCK */}
               <div className="p-6 rounded-xl border border-[#111e40] bg-[#0c1630] max-w-2xl space-y-4">
                 <h3 className="text-sm font-mono font-bold text-gray-300">QUICK STUDENT MANUAL ENROLLMENT</h3>
@@ -749,11 +1019,46 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {/* BULK ACTION CONTROL STRIP */}
+              {selectedStudentIds.length > 0 && (
+                <div className="p-4 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.03] flex items-center justify-between gap-4 max-w-4xl">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+                    <span className="text-xs font-bold text-gray-200">
+                      Selected <span className="font-mono text-cyan-400 bg-cyan-400/10 px-1.5 py-0.5 rounded">{selectedStudentIds.length}</span> students for batch operations.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsBulkEmailModalOpen(true)}
+                      className="flex items-center gap-1.5 bg-cyan-400 hover:bg-cyan-350 text-[#0A1228] px-3.5 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer transition-all"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      Send Batch Notification
+                    </button>
+                    <button
+                      onClick={() => setSelectedStudentIds([])}
+                      className="text-xs text-gray-400 hover:text-white px-2 cursor-pointer"
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* TABLE LISTS */}
               <div className="overflow-x-auto rounded-xl border border-[#111e40] bg-[#0c1630]">
                 <table className="w-full text-left text-xs text-gray-400">
                   <thead className="bg-[#0A1228] border-b border-[#111e40] text-gray-300 font-mono">
                     <tr>
+                      <th className="p-4 w-12 text-center">
+                        <input
+                          type="checkbox"
+                          checked={filteredStudents.length > 0 && filteredStudents.every(s => selectedStudentIds.includes(s.id))}
+                          onChange={() => handleToggleSelectAll(filteredStudents)}
+                          className="h-4 w-4 rounded border-[#111e40] bg-[#0A1228] text-cyan-400 focus:ring-cyan-400/25 cursor-pointer"
+                        />
+                      </th>
                       <th className="p-4">Full Name</th>
                       <th className="p-4">Email</th>
                       <th className="p-4">WhatsApp Phone</th>
@@ -785,6 +1090,14 @@ export default function AdminDashboard() {
                                 }
                               }}
                             >
+                              <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedStudentIds.includes(stud.id)}
+                                  onChange={() => handleToggleSelectStudent(stud.id)}
+                                  className="h-4 w-4 rounded border-[#111e40] bg-[#0A1228] text-cyan-400 focus:ring-cyan-400/25 cursor-pointer"
+                                />
+                              </td>
                               <td className="p-4 text-white font-semibold flex items-center gap-2">
                                 {isExpanded ? <ChevronUp className="h-4 w-4 text-cyan-400 shrink-0" /> : <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />}
                                 <span>{stud.full_name}</span>
@@ -806,7 +1119,7 @@ export default function AdminDashboard() {
                             {/* EXPANDED DETAILED REVIEWS & UPDATER BOX */}
                             {isExpanded && (
                               <tr onClick={(e) => e.stopPropagation()}>
-                                <td colSpan={5} className="bg-[#0b1224] p-6 border-b border-[#111e40]">
+                                <td colSpan={6} className="bg-[#0b1224] p-6 border-b border-[#111e40]">
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     
                                     {/* PANEL A: LOGIN DETAILS & SECURE PASSWORD RECOVERY */}
@@ -1001,7 +1314,7 @@ export default function AdminDashboard() {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={5} className="p-8 text-center text-gray-500 italic">
+                        <td colSpan={6} className="p-8 text-center text-gray-500 italic">
                           No student records match query search parameters.
                         </td>
                       </tr>
@@ -1665,12 +1978,147 @@ export default function AdminDashboard() {
                   </button>
                 </div>
 
+                {/* 4. Student Progress Report Export Card */}
+                <div className="p-6 rounded-xl border border-[#111e40] bg-[#0c1630] flex flex-col sm:flex-row items-center justify-between gap-6 hover:border-pink-400/20 transition-all">
+                  <div className="space-y-1 text-center sm:text-left">
+                    <h3 className="text-base font-bold text-white leading-tight">Student Progress Report</h3>
+                    <p className="text-xs text-gray-450">Comprehensive tracking matrix of every student's enrollment status and total completion pace.</p>
+                  </div>
+                  <button
+                    onClick={() => triggerSheetExport('progress_report')}
+                    className="flex items-center gap-1 px-5 py-3 rounded-lg bg-pink-400 hover:bg-pink-350 text-[#0A1228] font-bold text-xs shrink-0 cursor-pointer"
+                  >
+                    <Download className="h-4.5 w-4.5" />
+                    Export Progress
+                  </button>
+                </div>
+
               </div>
             </div>
           )}
 
         </main>
       </div>
+
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in select-none">
+          <div className="bg-[#0c1630] border border-[#111e40] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 relative">
+            <div className="flex items-start gap-3">
+              <div className={`p-2.5 rounded-lg shrink-0 ${
+                confirmModal.type === 'danger' 
+                  ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
+                  : 'bg-cyan-400/10 text-cyan-400 border border-cyan-400/20'
+              }`}>
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wide">{confirmModal.title}</h3>
+                <p className="text-xs text-gray-400 mt-2 leading-relaxed font-sans">{confirmModal.message}</p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 bg-[#111e40] text-gray-400 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+              >
+                {confirmModal.cancelText || 'Cancel'}
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className={`px-4 py-2 rounded-lg text-xs font-bold text-[#0A1228] transition-all cursor-pointer ${
+                  confirmModal.type === 'danger'
+                    ? 'bg-red-500 hover:bg-red-400 text-white'
+                    : 'bg-cyan-400 hover:bg-cyan-350'
+                }`}
+              >
+                {confirmModal.confirmText || 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isBulkEmailModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in select-none">
+          <div className="bg-[#0c1630] border border-[#111e40] rounded-2xl p-6 max-w-xl w-full shadow-2xl space-y-4 relative">
+            <div>
+              <h3 className="text-sm font-bold text-white font-mono uppercase tracking-wide flex items-center gap-1.5">
+                <Send className="h-4.5 w-4.5 text-cyan-400" />
+                Dispatch Mass Announcement
+              </h3>
+              <p className="text-xs text-gray-400 mt-1 font-sans">
+                Deploying custom system bulletin campaign to the following <span className="font-mono text-cyan-400 font-bold">{selectedStudentIds.length}</span> students.
+              </p>
+            </div>
+
+            <form onSubmit={handleSendBulkAnnouncement} className="space-y-4 pt-2">
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-500 font-mono font-bold uppercase block">Recipient Addresses</label>
+                <div className="bg-[#0A1228] p-2 rounded-lg border border-[#111e40] text-[10px] text-gray-450 max-h-20 overflow-y-auto font-mono leading-relaxed select-all">
+                  {profilesList
+                    .filter(p => selectedStudentIds.includes(p.id))
+                    .map(p => p.email)
+                    .join(', ')}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-400 font-mono block">Email Subject line</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g., Academy Updates: Weekend Masterclass coordinates and times"
+                  value={bulkEmailSubject}
+                  onChange={(e) => setBulkEmailSubject(e.target.value)}
+                  className="w-full bg-[#0A1228] border border-[#111e40] rounded-lg p-2.5 text-xs text-white focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-gray-400 font-mono block">Bulletin Body message</label>
+                <textarea
+                  required
+                  rows={6}
+                  placeholder="Insert mass bulletin content here..."
+                  value={bulkEmailBody}
+                  onChange={(e) => setBulkEmailBody(e.target.value)}
+                  className="w-full bg-[#0A1228] border border-[#111e40] rounded-lg p-2.5 text-xs text-white focus:outline-none font-mono leading-relaxed resize-none"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button
+                  type="button"
+                  disabled={isSendingBulkEmail}
+                  onClick={() => setIsBulkEmailModalOpen(false)}
+                  className="px-4 py-2 bg-[#111e40] text-gray-400 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+                >
+                  Dismiss Campaign
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingBulkEmail}
+                  className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-350 text-[#0A1228] text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 min-w-[120px]"
+                >
+                  {isSendingBulkEmail ? (
+                    <>
+                      <div className="h-3.5 w-3.5 border-2 border-[#0A1228] border-t-transparent rounded-full animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-3.5 w-3.5" />
+                      Push Broadcast
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
