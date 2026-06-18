@@ -589,17 +589,35 @@ Delight Tech Network Automation Webhook
         return NextResponse.json({ success: true });
       }
 
+      case 'admin:issue-certificate':
       case 'admin:manual-issue-certificate': {
         const user = getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
-        const { enrollment_id } = payload;
-        const enroll = db.enrollments.find(e => e.id === enrollment_id);
+        const { enrollment_id, student_id, course_id } = payload;
+        let enroll: Enrollment | undefined;
+
+        if (enrollment_id) {
+          enroll = db.enrollments.find(e => e.id === enrollment_id);
+        } else if (student_id && course_id) {
+          enroll = db.enrollments.find(e => e.student_id === student_id && e.course_id === course_id);
+          if (!enroll) {
+            const newEnrollmentId = `enroll-${Date.now()}`;
+            enroll = {
+              id: newEnrollmentId,
+              student_id,
+              course_id,
+              status: 'active',
+              payment_status: 'free',
+              enrolled_at: new Date().toISOString()
+            };
+            db.enrollments.push(enroll);
+          }
+        }
         
         if (!enroll) return NextResponse.json({ error: 'Enrollment not found' }, { status: 404 });
 
-        // Check already issued
-        const certExists = db.certificates.find(c => c.enrollment_id === enrollment_id);
+        const certExists = db.certificates.find(c => c.enrollment_id === enroll.id);
         if (certExists) return NextResponse.json({ error: 'Certificate already issued for this course enrollment.' });
 
         const yearStr = new Date().getFullYear();
@@ -608,24 +626,23 @@ Delight Tech Network Automation Webhook
 
         const newCert: Certificate = {
           id: `cert-${Date.now()}`,
-          enrollment_id,
+          enrollment_id: enroll.id,
           issued_at: new Date().toISOString(),
           unique_code: uniqueCode
         };
 
         db.certificates.push(newCert);
 
-        // Auto mark all stages as complete to align database progress state
         const stages = db.course_stages.filter(s => s.course_id === enroll.course_id);
         stages.forEach(stage => {
-          const prog = db.progress.find(p => p.enrollment_id === enrollment_id && p.stage_id === stage.id);
+          const prog = db.progress.find(p => p.enrollment_id === enroll.id && p.stage_id === stage.id);
           if (prog) {
             prog.completed = true;
             prog.completed_at = new Date().toISOString();
           } else {
             db.progress.push({
               id: `prog-${Date.now()}-${stage.id}`,
-              enrollment_id,
+              enrollment_id: enroll.id,
               stage_id: stage.id,
               completed: true,
               completed_at: new Date().toISOString()
@@ -637,7 +654,7 @@ Delight Tech Network Automation Webhook
         enroll.completed_at = new Date().toISOString();
 
         saveDb(db);
-        return NextResponse.json({ success: true, certificateCode: uniqueCode });
+        return NextResponse.json({ success: true, unique_code: uniqueCode, certificateCode: uniqueCode });
       }
 
       case 'admin:revoke-certificate': {
@@ -683,6 +700,7 @@ Delight Tech Network Automation Webhook
         return NextResponse.json({ success: true, registration: reg });
       }
 
+      case 'admin:approve-registration':
       case 'admin:convert-to-student': {
         const user = getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
@@ -692,24 +710,21 @@ Delight Tech Network Automation Webhook
         
         if (!reg) return NextResponse.json({ error: 'Registration not found' }, { status: 404 });
 
-        // Check if student profile already exists with this email
         let studentProfile = db.profiles.find(p => p.email.toLowerCase() === reg.email.toLowerCase());
         
         if (!studentProfile) {
-          // Create student profile
           studentProfile = {
             id: `user-${Date.now()}`,
             full_name: reg.full_name,
             email: reg.email,
             phone: reg.phone,
             role: 'student',
-            password: 'student123', // Default credentials
+            password: 'student123',
             created_at: new Date().toISOString()
           };
           db.profiles.push(studentProfile);
         }
 
-        // Enroll in course if specified
         if (reg.course_id) {
           const course = db.courses.find(c => c.id === reg.course_id);
           const alreadyEnrolled = db.enrollments.find(e => e.student_id === studentProfile.id && e.course_id === reg.course_id);
@@ -725,7 +740,6 @@ Delight Tech Network Automation Webhook
               enrolled_at: new Date().toISOString()
             });
 
-            // Pre-seed stages
             const stages = db.course_stages.filter(s => s.course_id === reg.course_id);
             stages.forEach(stage => {
               db.progress.push({
@@ -741,17 +755,40 @@ Delight Tech Network Automation Webhook
         reg.status = 'enrolled';
         saveDb(db);
 
-        return NextResponse.json({ success: true, studentEmail: reg.email });
+        return NextResponse.json({
+          success: true,
+          studentEmail: reg.email,
+          generatedEmail: reg.email
+        });
       }
 
       case 'admin:delete-registration': {
         const user = getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
-        const { id } = payload;
-        db.registrations = db.registrations.filter(r => r.id !== id);
+        const { id, registration_id } = payload;
+        const targetId = id || registration_id;
+        db.registrations = db.registrations.filter(r => r.id !== targetId);
         saveDb(db);
 
+        return NextResponse.json({ success: true });
+      }
+
+      case 'admin:delete-profile': {
+        const user = getSessionUser();
+        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+
+        const { profile_id } = payload;
+
+        const studentEnrollments = db.enrollments.filter(e => e.student_id === profile_id);
+        const enrollmentIds = studentEnrollments.map(e => e.id);
+
+        db.enrollments = db.enrollments.filter(e => e.student_id !== profile_id);
+        db.progress = db.progress.filter(p => !enrollmentIds.includes(p.enrollment_id));
+        db.certificates = db.certificates.filter(c => !enrollmentIds.includes(c.enrollment_id));
+        db.profiles = db.profiles.filter(p => p.id !== profile_id);
+
+        saveDb(db);
         return NextResponse.json({ success: true });
       }
 
@@ -876,6 +913,7 @@ Delight Tech Network Automation Webhook
       }
 
       // --- STAGE LEVEL MANIPULATIONS ---
+      case 'admin:create-stage':
       case 'admin:add-stage': {
         const user = getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
