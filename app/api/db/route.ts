@@ -2,38 +2,41 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { loadDb, saveDb as diskSaveDb, Profile, Enrollment, StudentProgress, Certificate, Registration, Course, CourseStage, Category } from '@/lib/db-store';
-import { getSupabaseClient, pullFromSupabase, pushToSupabase } from '@/lib/supabase';
+import { supabaseAdmin } from '@/lib/supabase';
+import bcrypt from 'bcryptjs';
+import { createSession, getSessionUserId, deleteSession } from '@/lib/auth-utils';
+import {
+  Profile,
+  Enrollment,
+  StudentProgress,
+  Certificate,
+  Registration,
+  Course,
+  CourseStage,
+  Category
+} from '@/lib/db-store';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, payload } = body;
 
-    let db = loadDb();
-    const supabaseClient = getSupabaseClient();
-
-    if (supabaseClient) {
-      db = await pullFromSupabase(supabaseClient, db);
-    }
-
-    const saveDb = (updatedDb: any) => {
-      diskSaveDb(updatedDb);
-      if (supabaseClient) {
-        pushToSupabase(supabaseClient, updatedDb).catch(err => {
-          console.error('Supabase background push failure:', err);
-        });
-      }
-    };
-
-    // Helper: get logged in user profile synchronously from request cookies
-    const getSessionUser = (): Profile | null => {
+    // Helper: get logged in user profile from Supabase
+    const getSessionUser = async (): Promise<Profile | null> => {
       try {
-        const sessionId = req.cookies.get('delight_user_id')?.value;
-        if (!sessionId) return null;
-        return db.profiles.find(p => p.id === sessionId) || null;
+        const userId = await getSessionUserId();
+        if (!userId) return null;
+
+        const { data, error } = await supabaseAdmin
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
+
+        if (error || !data) return null;
+        return data as Profile;
       } catch (e) {
-        console.error('Error reading registration session cookies:', e);
+        console.error('Error reading session:', e);
         return null;
       }
     };
@@ -42,764 +45,453 @@ export async function POST(req: NextRequest) {
       // --- AUTH ACTIONS ---
       case 'auth:login': {
         const { email, password } = payload;
-        const profile = db.profiles.find(p => p.email.toLowerCase() === email.toLowerCase());
+        console.log('Login attempt for:', email);
+        const { data: profile, error } = await supabaseAdmin
+          .from('profiles')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .single();
         
-        if (!profile || profile.password !== password) {
+        if (error) {
+          console.error('Login database error:', error);
           return NextResponse.json({ error: 'Invalid email or password' }, { status: 400 });
         }
 
-        // Set session cookie
-        const loginStore = await cookies();
-        loginStore.set('delight_user_id', profile.id, {
-          path: '/',
-          httpOnly: true,
-          secure: true,
-          maxAge: 60 * 60 * 24 * 7, // 1 week
-          sameSite: 'strict',
-        });
+        if (!profile) {
+          return NextResponse.json({ error: 'Invalid email or password' }, { status: 400 });
+        }
 
-        // Strip password before returning
-        const { password: _, ...safeProfile } = profile as any;
+        // Support both hashed and legacy plaintext passwords during transition
+        let isValid = false;
+        if (profile.password.startsWith('$2a$') || profile.password.startsWith('$2b$')) {
+          isValid = await bcrypt.compare(password, profile.password);
+        } else {
+          isValid = profile.password === password;
+        }
+
+        if (!isValid) {
+          console.log('Login failed: password mismatch');
+          return NextResponse.json({ error: 'Invalid email or password' }, { status: 400 });
+        }
+
+        await createSession(profile.id);
+
+        const { password: _, ...safeProfile } = profile;
         return NextResponse.json({ user: safeProfile });
       }
 
       case 'auth:register': {
         const { email, password, full_name, phone } = payload;
-        const exists = db.profiles.find(p => p.email.toLowerCase() === email.toLowerCase());
         
-        if (exists) {
+        // Check exists
+        const { data: existing } = await supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .eq('email', email.toLowerCase())
+          .single();
+
+        if (existing) {
           return NextResponse.json({ error: 'An account with this email already exists' }, { status: 400 });
         }
 
-        const newProfile: Profile = {
-          id: `user-${Date.now()}`,
-          full_name,
-          email,
-          phone,
-          role: 'student', // Register defaults to student
-          password,
-          created_at: new Date().toISOString()
-        };
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-        db.profiles.push(newProfile);
-        saveDb(db);
+        const { data: newProfile, error } = await supabaseAdmin
+          .from('profiles')
+          .insert([{
+            full_name,
+            email: email.toLowerCase(),
+            phone,
+            role: 'student',
+            password: hashedPassword,
+            created_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-        // Auto login
-        const registerStore = await cookies();
-        registerStore.set('delight_user_id', newProfile.id, {
-          path: '/',
-          httpOnly: true,
-          secure: true,
-          maxAge: 60 * 60 * 24 * 7,
-          sameSite: 'strict',
-        });
+        if (error) throw error;
 
-        const { password: _, ...safeProfile } = newProfile as any;
+        await createSession(newProfile.id);
+
+        const { password: _, ...safeProfile } = newProfile;
         return NextResponse.json({ user: safeProfile });
       }
 
       case 'auth:me': {
-        const user = getSessionUser();
-        if (!user) {
-          return NextResponse.json({ user: null });
-        }
+        const user = await getSessionUser();
+        if (!user) return NextResponse.json({ user: null });
         const { password: _, ...safeProfile } = user as any;
         return NextResponse.json({ user: safeProfile });
       }
 
       case 'auth:logout': {
-        const logoutStore = await cookies();
-        logoutStore.set('delight_user_id', '', { path: '/', maxAge: 0 });
+        await deleteSession();
         return NextResponse.json({ success: true });
       }
 
       case 'auth:update-profile': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
         const { full_name, phone, password, avatar_url } = payload;
-        const match = db.profiles.find(p => p.id === user.id);
         
-        if (match) {
-          if (full_name) match.full_name = full_name;
-          if (phone) match.phone = phone;
-          if (password) match.password = password;
-          if (avatar_url) match.avatar_url = avatar_url;
-          saveDb(db);
+        const updates: any = { full_name, phone, avatar_url };
+        if (password) {
+          updates.password = await bcrypt.hash(password, 10);
         }
 
-        const { password: _, ...safeProfile } = match as any;
+        const { data: updated, error } = await supabaseAdmin
+          .from('profiles')
+          .update(updates)
+          .eq('id', user.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        const { password: _, ...safeProfile } = updated;
         return NextResponse.json({ user: safeProfile });
       }
 
       // --- PUBLIC / WEBSITE WORKFLOWS ---
       case 'website:register-course': {
         const { full_name, email, phone, course_id, message } = payload;
-        const newReg: Registration = {
-          id: `reg-${Date.now()}`,
-          full_name,
-          email,
-          phone,
-          course_id,
-          message,
-          source: 'website',
-          status: 'new',
-          submitted_at: new Date().toISOString()
-        };
+        const { data: newReg, error } = await supabaseAdmin
+          .from('registrations')
+          .insert([{
+            id: `reg-${Date.now()}`,
+            full_name,
+            email,
+            phone,
+            course_id,
+            message,
+            source: 'website',
+            status: 'new',
+            submitted_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-        db.registrations.unshift(newReg);
-        saveDb(db);
-
-        // Fetch course title for rich email insights
-        const course = db.courses?.find(c => c.id === course_id);
-        const courseTitle = course ? course.title : (course_id || 'General Admission / Custom Bundle');
-
-        // Trigger automated mock email notification block
-        console.log(`
-================================================================================
-📧 [AUTOMATED MOCK EMAIL NOTIFICATION FOR ADMIN]
-TO: admin@delighttechnetwork.com
-SUBJECT: Alert: New Student Course Registration - ${full_name}
-TIMESTAMP: ${newReg.submitted_at}
---------------------------------------------------------------------------------
-Hello Admin,
-
-A digital enrollment request has been logged via the Delight Tech Landing Page.
-
-APPLICANT REGISTRATION RECORD:
-- Full Name:    ${full_name}
-- Email Contact: ${email}
-- Phone Mobile:  ${phone}
-- Core Program:  ${courseTitle}
-- Extra Notes:   ${message || 'No custom statement provided.'}
-
-To process or assign a batch cohort for this applicant, log into your 
-Delight Tech Administrative Panel:
-https://delightacademy.vercel.app/admin
-
-Best regards,
-Delight Tech Network Automation Webhook
-================================================================================
-        `);
-
+        if (error) throw error;
         return NextResponse.json({ success: true, registration: newReg });
       }
 
       case 'website:send-contact': {
         const { full_name, email, phone, message, subject } = payload;
-        
-        // Save contact message inside registrations table with source = 'contact'
-        const newReg: Registration = {
-          id: `reg-${Date.now()}`,
-          full_name,
-          email,
-          phone,
-          course_id: '', // Blank or general
-          message: `Subject: ${subject} | Message: ${message}`,
-          source: 'contact',
-          status: 'new',
-          submitted_at: new Date().toISOString()
-        };
+        const { data: newReg, error } = await supabaseAdmin
+          .from('registrations')
+          .insert([{
+            id: `reg-${Date.now()}`,
+            full_name,
+            email,
+            phone,
+            course_id: null,
+            message: `Subject: ${subject} | Message: ${message}`,
+            source: 'contact',
+            status: 'new',
+            submitted_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-        db.registrations.unshift(newReg);
-        saveDb(db);
+        if (error) throw error;
         return NextResponse.json({ success: true, message: newReg });
       }
 
       case 'website:subscribe-newsletter': {
         const { email } = payload;
-        
-        // Save newsletter subscriber as a contact with a "Newsletter Subscription" subject in description
-        const newReg: Registration = {
-          id: `reg-${Date.now()}`,
-          full_name: 'Newsletter Subscriber',
-          email,
-          phone: '-',
-          course_id: '',
-          message: 'Newsletter Subscription',
-          source: 'contact', // Complies with supabase source check constraints
-          status: 'new',
-          submitted_at: new Date().toISOString()
-        };
+        const { data: newReg, error } = await supabaseAdmin
+          .from('registrations')
+          .insert([{
+            id: `reg-${Date.now()}`,
+            full_name: 'Newsletter Subscriber',
+            email,
+            phone: '-',
+            course_id: null,
+            message: 'Newsletter Subscription',
+            source: 'contact',
+            status: 'new',
+            submitted_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-        db.registrations.unshift(newReg);
-        saveDb(db);
+        if (error) throw error;
         return NextResponse.json({ success: true, newsletter: newReg });
       }
 
-      // --- GET INITIAL CONTENT (Courses & Categories) ---
+      // --- CONTENT ---
       case 'content:get-catalog': {
+        const [cats, crs, stgs] = await Promise.all([
+          supabaseAdmin.from('categories').select('*').order('name'),
+          supabaseAdmin.from('courses').select('*').order('created_at'),
+          supabaseAdmin.from('course_stages').select('*').order('order_index')
+        ]);
         return NextResponse.json({
-          categories: db.categories,
-          courses: db.courses,
-          course_stages: db.course_stages
+          categories: cats.data || [],
+          courses: crs.data || [],
+          course_stages: stgs.data || []
         });
       }
 
-      // --- STUDENT DASHBOARD ACTIONS ---
+      // --- STUDENT DASHBOARD ---
       case 'student:get-dashboard-data': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-        // Get student's enrollments
-        const enrollments = db.enrollments.filter(e => e.student_id === user.id);
+        const { data: enrollments } = await supabaseAdmin
+          .from('enrollments')
+          .select('*')
+          .eq('student_id', user.id);
         
-        // Progress logs
-        const enrollmentIds = enrollments.map(e => e.id);
-        const progress = db.progress.filter(p => enrollmentIds.includes(p.enrollment_id));
+        const enrollmentIds = enrollments?.map(e => e.id) || [];
 
-        // Earned certificates
-        const certificates = db.certificates.filter(c => enrollmentIds.includes(c.enrollment_id));
+        const [prog, certs] = await Promise.all([
+          supabaseAdmin.from('progress').select('*').in('enrollment_id', enrollmentIds),
+          supabaseAdmin.from('certificates').select('*').in('enrollment_id', enrollmentIds)
+        ]);
 
         return NextResponse.json({
-          enrollments,
-          progress,
-          certificates
+          enrollments: enrollments || [],
+          progress: prog.data || [],
+          certificates: certs.data || []
         });
       }
 
       case 'student:self-enroll': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
         const { course_id } = payload;
+        const { data: existing } = await supabaseAdmin
+          .from('enrollments')
+          .select('id')
+          .eq('student_id', user.id)
+          .eq('course_id', course_id)
+          .single();
 
-        // Verify not already enrolled
-        const exists = db.enrollments.find(e => e.student_id === user.id && e.course_id === course_id);
-        if (exists) {
-          return NextResponse.json({ error: 'Already enrolled' });
-        }
+        if (existing) return NextResponse.json({ error: 'Already enrolled' });
 
-        const course = db.courses.find(c => c.id === course_id);
+        const { data: course } = await supabaseAdmin.from('courses').select('price').eq('id', course_id).single();
         if (!course) return NextResponse.json({ error: 'Course not found' }, { status: 404 });
 
-        const isFree = course.price === 0;
         const enrollmentId = `enroll-${Date.now()}`;
-        const newEnrollment: Enrollment = {
-          id: enrollmentId,
-          student_id: user.id,
-          course_id,
-          status: 'active',
-          payment_status: isFree ? 'free' : 'pending',
-          enrolled_at: new Date().toISOString()
-        };
+        const { data: newEnrollment, error: enrollError } = await supabaseAdmin
+          .from('enrollments')
+          .insert([{
+            id: enrollmentId,
+            student_id: user.id,
+            course_id,
+            status: 'active',
+            payment_status: course.price === 0 ? 'free' : 'pending',
+            enrolled_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-        db.enrollments.push(newEnrollment);
+        if (enrollError) throw enrollError;
 
-        // Pre-create progress records for each stage in the course as uncompleted
-        const stages = db.course_stages.filter(s => s.course_id === course_id);
-        stages.forEach(stage => {
-          db.progress.push({
-            id: `prog-${Date.now()}-${stage.id}`,
+        // Pre-create progress
+        const { data: stages } = await supabaseAdmin.from('course_stages').select('id').eq('course_id', course_id);
+        if (stages && stages.length > 0) {
+          const progressRows = stages.map(s => ({
+            id: `prog-${Date.now()}-${s.id}`,
             enrollment_id: enrollmentId,
-            stage_id: stage.id,
+            stage_id: s.id,
             completed: false
-          });
-        });
+          }));
+          await supabaseAdmin.from('progress').insert(progressRows);
+        }
 
-        saveDb(db);
         return NextResponse.json({ enrollment: newEnrollment });
       }
 
       case 'student:toggle-progress': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
         const { enrollment_id, stage_id, completed } = payload;
-
-        // Verify student owns enrollment
-        const enroll = db.enrollments.find(e => e.id === enrollment_id && e.student_id === user.id);
-        if (!enroll) return NextResponse.json({ error: 'Enrollment not found' }, { status: 404 });
-
-        // Update progress item
-        const prog = db.progress.find(p => p.enrollment_id === enrollment_id && p.stage_id === stage_id);
         const nowStr = new Date().toISOString();
 
-        if (prog) {
-          prog.completed = completed;
-          prog.completed_at = completed ? nowStr : undefined;
+        // Update or Insert
+        const { data: existingProg } = await supabaseAdmin
+          .from('progress')
+          .select('id')
+          .eq('enrollment_id', enrollment_id)
+          .eq('stage_id', stage_id)
+          .single();
+
+        if (existingProg) {
+          await supabaseAdmin.from('progress')
+            .update({ completed, completed_at: completed ? nowStr : null })
+            .eq('id', existingProg.id);
         } else {
-          // Fallback create progress if missing
-          db.progress.push({
+          await supabaseAdmin.from('progress').insert([{
             id: `prog-${Date.now()}`,
             enrollment_id,
             stage_id,
             completed,
-            completed_at: completed ? nowStr : undefined
-          });
+            completed_at: completed ? nowStr : null
+          }]);
         }
 
-        // CHECK IF ALL STAGES OF THIS COURSE ARE COMPLETED
-        const courseStages = db.course_stages.filter(s => s.course_id === enroll.course_id);
-        const studentProgress = db.progress.filter(p => p.enrollment_id === enrollment_id);
+        // Check for course completion
+        const { data: enroll } = await supabaseAdmin.from('enrollments').select('course_id, status').eq('id', enrollment_id).single();
+        if (enroll) {
+          const [{ data: stages }, { data: progs }] = await Promise.all([
+            supabaseAdmin.from('course_stages').select('id').eq('course_id', enroll.course_id),
+            supabaseAdmin.from('progress').select('stage_id, completed').eq('enrollment_id', enrollment_id)
+          ]);
 
-        const allCompleted = courseStages.every(stage => {
-          const matchProg = studentProgress.find(p => p.stage_id === stage.id);
-          return matchProg?.completed === true;
-        });
+          const allCompleted = stages?.every(s => progs?.find(p => p.stage_id === s.id)?.completed) ?? false;
+          let newlyCompletedCert = null;
 
-        let newlyCompletedCert = null;
+          if (allCompleted && enroll.status === 'active') {
+            const { data: certExists } = await supabaseAdmin.from('certificates').select('id').eq('enrollment_id', enrollment_id).single();
+            if (!certExists) {
+              const { data: totalCerts } = await supabaseAdmin.from('certificates').select('id', { count: 'exact' });
+              const serialNum = String((totalCerts?.length || 0) + 124).padStart(5, '0');
+              const uniqueCode = `DTN-${new Date().getFullYear()}-${serialNum}`;
 
-        if (allCompleted && enroll.status === 'active') {
-          // Check if certificate already exists
-          const certExists = db.certificates.find(c => c.enrollment_id === enrollment_id);
-          if (!certExists) {
-            // Generate Certificate!
-            const yearStr = new Date().getFullYear();
-            // Count total issued to generate serial
-            const serialNum = String(db.certificates.length + 124).padStart(5, '0');
-            const uniqueCode = `DTN-${yearStr}-${serialNum}`;
+              const { data: newCert } = await supabaseAdmin.from('certificates').insert([{
+                id: `cert-${Date.now()}`,
+                enrollment_id,
+                issued_at: nowStr,
+                unique_code: uniqueCode
+              }]).select().single();
 
-            const newCert: Certificate = {
-              id: `cert-${Date.now()}`,
-              enrollment_id,
-              issued_at: nowStr,
-              unique_code: uniqueCode
-            };
-
-            db.certificates.push(newCert);
-            newlyCompletedCert = newCert;
-
-            // Mark enrollment completed
-            enroll.status = 'completed';
-            enroll.completed_at = nowStr;
+              await supabaseAdmin.from('enrollments').update({ status: 'completed', completed_at: nowStr }).eq('id', enrollment_id);
+              newlyCompletedCert = newCert;
+            }
+          } else if (!allCompleted && enroll.status === 'completed') {
+            await supabaseAdmin.from('enrollments').update({ status: 'active', completed_at: null }).eq('id', enrollment_id);
+            await supabaseAdmin.from('certificates').delete().eq('enrollment_id', enrollment_id);
           }
-        } else if (!allCompleted && enroll.status === 'completed') {
-          // Revoke status if uncompleted a module, delete matching certificate to remain correct
-          enroll.status = 'active';
-          enroll.completed_at = undefined;
-          db.certificates = db.certificates.filter(c => c.enrollment_id !== enrollment_id);
+
+          return NextResponse.json({ success: true, certificateIssued: newlyCompletedCert });
         }
 
-        saveDb(db);
-        return NextResponse.json({
-          success: true,
-          enrollmentStatus: enroll.status,
-          certificateIssued: newlyCompletedCert
-        });
+        return NextResponse.json({ success: true });
       }
 
-      // --- ADMIN PANEL ACTIONS (GUARDED WITH ROLE ADMIN) ---
+      // --- ADMIN PANEL ---
       case 'admin:get-overall-state': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') {
-          return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-        }
+        const user = await getSessionUser();
+        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+
+        const [profs, enrs, regs, certs, progs, crs, stgs, cats] = await Promise.all([
+          supabaseAdmin.from('profiles').select('*'),
+          supabaseAdmin.from('enrollments').select('*'),
+          supabaseAdmin.from('registrations').select('*').order('submitted_at', { ascending: false }),
+          supabaseAdmin.from('certificates').select('*'),
+          supabaseAdmin.from('progress').select('*'),
+          supabaseAdmin.from('courses').select('*'),
+          supabaseAdmin.from('course_stages').select('*'),
+          supabaseAdmin.from('categories').select('*')
+        ]);
+
         return NextResponse.json({
-          profiles: db.profiles,
-          enrollments: db.enrollments,
-          registrations: db.registrations,
-          certificates: db.certificates,
-          progress: db.progress,
-          courses: db.courses,
-          course_stages: db.course_stages,
-          categories: db.categories
+          profiles: profs.data || [],
+          enrollments: enrs.data || [],
+          registrations: regs.data || [],
+          certificates: certs.data || [],
+          progress: progs.data || [],
+          courses: crs.data || [],
+          course_stages: stgs.data || [],
+          categories: cats.data || []
         });
       }
 
       case 'admin:update-student-credentials': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') {
-          return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-        }
+        const user = await getSessionUser();
+        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
         const { student_id, email, password } = payload;
-        const studentProfile = db.profiles.find(p => p.id === student_id && p.role === 'student');
-        if (!studentProfile) {
-          return NextResponse.json({ error: 'Student profile not found' }, { status: 404 });
-        }
 
-        if (email) {
-          // Check uniqueness
-          const emailExists = db.profiles.find(p => p.id !== student_id && p.email.toLowerCase() === email.toLowerCase());
-          if (emailExists) {
-            return NextResponse.json({ error: 'Another user already registered with this email address.' }, { status: 400 });
-          }
-          studentProfile.email = email;
-        }
-
+        const updates: any = { email: email?.toLowerCase() };
         if (password) {
-          studentProfile.password = password;
+          updates.password = await bcrypt.hash(password, 10);
         }
 
-        saveDb(db);
-        return NextResponse.json({ success: true, student: studentProfile });
+        const { data: updated, error } = await supabaseAdmin
+          .from('profiles')
+          .update(updates)
+          .eq('id', student_id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        return NextResponse.json({ success: true, student: updated });
       }
 
-      case 'admin:get-dashboard-stats': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') {
-          return NextResponse.json({ error: 'Access Denied. Admins only.' }, { status: 403 });
-        }
-
-        const totalStudents = db.profiles.filter(p => p.role === 'student').length;
-        const totalEnrollments = db.enrollments.length;
-        const pendingRegistrations = db.registrations.filter(r => r.status === 'new').length;
-        const certificatesIssued = db.certificates.length;
-
-        // Get list of last 10 registrations
-        const recentRegistrations = db.registrations.slice(0, 10);
-
-        // Chart 1: Enrollments per Course
-        const courseEnrollmentCounts = db.courses.map(course => {
-          const enrollmentCount = db.enrollments.filter(e => e.course_id === course.id).length;
-          return {
-            name: course.title,
-            students: enrollmentCount
-          };
-        }).filter(item => item.students > 0 || db.courses.indexOf(db.courses.find(c => c.title === item.name)!) < 4); // Include some default courses to look nice even with low data
-
-        // Chart 2: Registration status trends
-        const registrationTrends = [
-          { status: 'New', count: db.registrations.filter(r => r.status === 'new').length },
-          { status: 'Contacted', count: db.registrations.filter(r => r.status === 'contacted').length },
-          { status: 'Enrolled', count: db.registrations.filter(r => r.status === 'enrolled').length },
-          { status: 'Rejected', count: db.registrations.filter(r => r.status === 'rejected').length }
-        ];
-
-        return NextResponse.json({
-          stats: {
-            totalStudents,
-            totalEnrollments,
-            pendingRegistrations,
-            certificatesIssued
-          },
-          recentRegistrations,
-          charts: {
-            courseEnrollments: courseEnrollmentCounts,
-            registrationTrends
-          }
-        });
-      }
-
-      case 'admin:get-students-data': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') {
-          return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-        }
-
-        // Return list of all student accounts
-        const students = db.profiles.filter(p => p.role === 'student');
-        
-        // Compile matching details: enrollments, progress, and certificates per student
-        const studentsWithDetails = students.map(student => {
-          const enrollments = db.enrollments.filter(e => e.student_id === student.id).map(enroll => {
-            const course = db.courses.find(c => c.id === enroll.course_id);
-            const stagesForCourse = db.course_stages.filter(s => s.course_id === enroll.course_id);
-            const doneProgress = db.progress.filter(p => p.enrollment_id === enroll.id && p.completed);
-            
-            const progressPercent = stagesForCourse.length > 0 
-              ? Math.round((doneProgress.length / stagesForCourse.length) * 100) 
-              : 0;
-
-            const cert = db.certificates.find(c => c.enrollment_id === enroll.id);
-
-            return {
-              ...enroll,
-              course_title: course?.title || 'Unknown Course',
-              price: course?.price || 0,
-              progress_percent: progressPercent,
-              certificate_code: cert?.unique_code
-            };
-          });
-
-          return {
-            ...student,
-            enrollments
-          };
-        });
-
-        return NextResponse.json({ students: studentsWithDetails });
-      }
-
-      case 'admin:toggle-student-status': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { student_id, actionType } = payload; // actionType: 'suspend' | 'activate'
-        
-        const enrolls = db.enrollments.filter(e => e.student_id === student_id);
-        enrolls.forEach(e => {
-          if (actionType === 'suspend') {
-            e.status = 'suspended';
-          } else {
-            e.status = 'active';
-          }
-        });
-
-        saveDb(db);
-        return NextResponse.json({ success: true });
-      }
-
-      case 'admin:manual-complete-stage': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { enrollment_id, stage_id, completed } = payload;
-        const nowStr = new Date().toISOString();
-
-        // 1. Get or create progress check
-        const progIndex = db.progress.findIndex(p => p.enrollment_id === enrollment_id && p.stage_id === stage_id);
-        if (progIndex > -1) {
-          db.progress[progIndex].completed = completed;
-          db.progress[progIndex].completed_at = completed ? nowStr : undefined;
-        } else {
-          db.progress.push({
-            id: `prog-${Date.now()}`,
-            enrollment_id,
-            stage_id,
-            completed,
-            completed_at: completed ? nowStr : undefined
-          });
-        }
-
-        // 2. Check if all courses completed
-        const enroll = db.enrollments.find(e => e.id === enrollment_id);
-        if (enroll) {
-          const courseStages = db.course_stages.filter(s => s.course_id === enroll.course_id);
-          const studentProgress = db.progress.filter(p => p.enrollment_id === enrollment_id);
-
-          const allCompleted = courseStages.every(stage => {
-            const matchProg = studentProgress.find(p => p.stage_id === stage.id);
-            return matchProg?.completed === true;
-          });
-
-          if (allCompleted && enroll.status !== 'completed') {
-            const yearStr = new Date().getFullYear();
-            const serialNum = String(db.certificates.length + 124).padStart(5, '0');
-            const uniqueCode = `DTN-${yearStr}-${serialNum}`;
-
-            db.certificates.push({
-              id: `cert-${Date.now()}`,
-              enrollment_id,
-              issued_at: nowStr,
-              unique_code: uniqueCode
-            });
-
-            enroll.status = 'completed';
-            enroll.completed_at = nowStr;
-          } else if (!allCompleted && enroll.status === 'completed') {
-            enroll.status = 'active';
-            enroll.completed_at = undefined;
-            db.certificates = db.certificates.filter(c => c.enrollment_id !== enrollment_id);
-          }
-        }
-
-        saveDb(db);
-        return NextResponse.json({ success: true });
-      }
-
-      case 'admin:issue-certificate':
-      case 'admin:manual-issue-certificate': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { enrollment_id, student_id, course_id } = payload;
-        let enroll: Enrollment | undefined;
-
-        if (enrollment_id) {
-          enroll = db.enrollments.find(e => e.id === enrollment_id);
-        } else if (student_id && course_id) {
-          enroll = db.enrollments.find(e => e.student_id === student_id && e.course_id === course_id);
-          if (!enroll) {
-            const newEnrollmentId = `enroll-${Date.now()}`;
-            enroll = {
-              id: newEnrollmentId,
-              student_id,
-              course_id,
-              status: 'active',
-              payment_status: 'free',
-              enrolled_at: new Date().toISOString()
-            };
-            db.enrollments.push(enroll);
-          }
-        }
-        
-        if (!enroll) return NextResponse.json({ error: 'Enrollment not found' }, { status: 404 });
-
-        const certExists = db.certificates.find(c => c.enrollment_id === enroll.id);
-        if (certExists) return NextResponse.json({ error: 'Certificate already issued for this course enrollment.' });
-
-        const yearStr = new Date().getFullYear();
-        const serialNum = String(db.certificates.length + 124).padStart(5, '0');
-        const uniqueCode = `DTN-${yearStr}-${serialNum}`;
-
-        const newCert: Certificate = {
-          id: `cert-${Date.now()}`,
-          enrollment_id: enroll.id,
-          issued_at: new Date().toISOString(),
-          unique_code: uniqueCode
-        };
-
-        db.certificates.push(newCert);
-
-        const stages = db.course_stages.filter(s => s.course_id === enroll.course_id);
-        stages.forEach(stage => {
-          const prog = db.progress.find(p => p.enrollment_id === enroll.id && p.stage_id === stage.id);
-          if (prog) {
-            prog.completed = true;
-            prog.completed_at = new Date().toISOString();
-          } else {
-            db.progress.push({
-              id: `prog-${Date.now()}-${stage.id}`,
-              enrollment_id: enroll.id,
-              stage_id: stage.id,
-              completed: true,
-              completed_at: new Date().toISOString()
-            });
-          }
-        });
-
-        enroll.status = 'completed';
-        enroll.completed_at = new Date().toISOString();
-
-        saveDb(db);
-        return NextResponse.json({ success: true, unique_code: uniqueCode, certificateCode: uniqueCode });
-      }
-
-      case 'admin:revoke-certificate': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { certificate_id } = payload;
-        const cert = db.certificates.find(c => c.id === certificate_id);
-        if (!cert) return NextResponse.json({ error: 'Certificate not found' }, { status: 404 });
-
-        // Downgrade matching enrollment back to active
-        const enroll = db.enrollments.find(e => e.id === cert.enrollment_id);
-        if (enroll) {
-          enroll.status = 'active';
-          enroll.completed_at = undefined;
-        }
-
-        db.certificates = db.certificates.filter(c => c.id !== certificate_id);
-        saveDb(db);
-
-        return NextResponse.json({ success: true });
-      }
-
-      case 'admin:get-registrations': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        return NextResponse.json({ registrations: db.registrations });
-      }
-
-      case 'admin:update-registration-status': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { id, status } = payload;
-        const reg = db.registrations.find(r => r.id === id);
-        
-        if (reg) {
-          reg.status = status;
-          saveDb(db);
-        }
-
-        return NextResponse.json({ success: true, registration: reg });
-      }
-
-      case 'admin:approve-registration':
-      case 'admin:convert-to-student': {
-        const user = getSessionUser();
+      case 'admin:approve-registration': {
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
         const { registration_id } = payload;
-        const reg = db.registrations.find(r => r.id === registration_id);
-        
+        const { data: reg } = await supabaseAdmin.from('registrations').select('*').eq('id', registration_id).single();
         if (!reg) return NextResponse.json({ error: 'Registration not found' }, { status: 404 });
 
-        let studentProfile = db.profiles.find(p => p.email.toLowerCase() === reg.email.toLowerCase());
+        let { data: student } = await supabaseAdmin.from('profiles').select('*').eq('email', reg.email.toLowerCase()).single();
         
-        if (!studentProfile) {
-          studentProfile = {
-            id: `user-${Date.now()}`,
+        if (!student) {
+          const hashedPassword = await bcrypt.hash('student123', 10);
+          const { data: newStudent, error: createError } = await supabaseAdmin.from('profiles').insert([{
             full_name: reg.full_name,
-            email: reg.email,
+            email: reg.email.toLowerCase(),
             phone: reg.phone,
             role: 'student',
-            password: 'student123',
+            password: hashedPassword,
             created_at: new Date().toISOString()
-          };
-          db.profiles.push(studentProfile);
+          }]).select().single();
+          if (createError) throw createError;
+          student = newStudent;
         }
 
-        if (reg.course_id) {
-          const course = db.courses.find(c => c.id === reg.course_id);
-          const alreadyEnrolled = db.enrollments.find(e => e.student_id === studentProfile.id && e.course_id === reg.course_id);
+        if (reg.course_id && student) {
+          const enrollmentId = `enroll-${Date.now()}`;
+          const { data: course } = await supabaseAdmin.from('courses').select('price').eq('id', reg.course_id).single();
 
-          if (!alreadyEnrolled) {
-            const enrollmentId = `enroll-${Date.now()}`;
-            db.enrollments.push({
-              id: enrollmentId,
-              student_id: studentProfile.id,
-              course_id: reg.course_id,
-              status: 'active',
-              payment_status: course?.price === 0 ? 'free' : 'paid',
-              enrolled_at: new Date().toISOString()
-            });
+          await supabaseAdmin.from('enrollments').upsert([{
+            id: enrollmentId,
+            student_id: student.id,
+            course_id: reg.course_id,
+            status: 'active',
+            payment_status: course?.price === 0 ? 'free' : 'paid',
+            enrolled_at: new Date().toISOString()
+          }]);
 
-            const stages = db.course_stages.filter(s => s.course_id === reg.course_id);
-            stages.forEach(stage => {
-              db.progress.push({
-                id: `prog-${Date.now()}-${stage.id}`,
-                enrollment_id: enrollmentId,
-                stage_id: stage.id,
-                completed: false
-              });
-            });
+          const { data: stages } = await supabaseAdmin.from('course_stages').select('id').eq('course_id', reg.course_id);
+          if (stages && stages.length > 0) {
+            const progressRows = stages.map(s => ({
+              id: `prog-${Date.now()}-${s.id}`,
+              enrollment_id: enrollmentId,
+              stage_id: s.id,
+              completed: false
+            }));
+            await supabaseAdmin.from('progress').insert(progressRows);
           }
         }
 
-        reg.status = 'enrolled';
-        saveDb(db);
-
-        return NextResponse.json({
-          success: true,
-          studentEmail: reg.email,
-          generatedEmail: reg.email
-        });
-      }
-
-      case 'admin:delete-registration': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { id, registration_id } = payload;
-        const targetId = id || registration_id;
-        db.registrations = db.registrations.filter(r => r.id !== targetId);
-        saveDb(db);
-
-        return NextResponse.json({ success: true });
+        await supabaseAdmin.from('registrations').update({ status: 'enrolled' }).eq('id', registration_id);
+        return NextResponse.json({ success: true, generatedEmail: reg.email });
       }
 
       case 'admin:delete-profile': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
         const { profile_id } = payload;
-
-        const studentEnrollments = db.enrollments.filter(e => e.student_id === profile_id);
-        const enrollmentIds = studentEnrollments.map(e => e.id);
-
-        db.enrollments = db.enrollments.filter(e => e.student_id !== profile_id);
-        db.progress = db.progress.filter(p => !enrollmentIds.includes(p.enrollment_id));
-        db.certificates = db.certificates.filter(c => !enrollmentIds.includes(c.enrollment_id));
-        db.profiles = db.profiles.filter(p => p.id !== profile_id);
-
-        saveDb(db);
+        await supabaseAdmin.from('profiles').delete().eq('id', profile_id);
         return NextResponse.json({ success: true });
       }
 
       case 'admin:create-course': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
-        const { title, subtitle, description, price, duration, level, category_id, thumbnail_url } = payload;
+        const { title, subtitle, description, price, duration, level, category_id, stage_template } = payload;
         const newCourseId = `course-${Date.now()}`;
         
-        const newCourse: Course = {
+        const { data: newCourse, error } = await supabaseAdmin.from('courses').insert([{
           id: newCourseId,
           category_id,
           title,
@@ -809,145 +501,143 @@ Delight Tech Network Automation Webhook
           duration,
           level,
           is_active: true,
-          thumbnail_url: thumbnail_url || 'https://picsum.photos/seed/delightcourse/600/400',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
-        };
+        }]).select().single();
 
-        db.courses.push(newCourse);
+        if (error) throw error;
 
-        // Prepopulate course with three standard stages/modules
-        db.course_stages.push(
-          {
-            id: `stage-${newCourseId}-1`,
+        if (stage_template !== 'No automatic stage') {
+          const templates = [
+            { title: 'Module 1: General Core Essentials', desc: 'Essential layout tools, frameworks, and theoretical fundamentals.' },
+            { title: 'Module 2: Practical Implementation Cases', desc: 'Hands-on projects and workflows built based on client and brand briefs.' },
+            { title: 'Module 3: Portfolio Showcase & Capstone Assessment', desc: 'Combine everything together and prepare for expert-level graduations.' }
+          ];
+          const stageRows = templates.map((t, i) => ({
+            id: `stage-${newCourseId}-${i+1}`,
             course_id: newCourseId,
-            title: 'Module 1: General Core Essentials',
-            description: 'Essential layout tools, frameworks, and theoretical fundamentals.',
-            order_index: 1,
+            title: t.title,
+            description: t.desc,
+            order_index: i + 1,
             created_at: new Date().toISOString()
-          },
-          {
-            id: `stage-${newCourseId}-2`,
-            course_id: newCourseId,
-            title: 'Module 2: Practical Implementation Cases',
-            description: 'Hands-on projects and workflows built based on client and brand briefs.',
-            order_index: 2,
-            created_at: new Date().toISOString()
-          },
-          {
-            id: `stage-${newCourseId}-3`,
-            course_id: newCourseId,
-            title: 'Module 3: Portfolio Showcase & Capstone Assessment',
-            description: 'Combine everything together and prepare for expert-level graduations.',
-            order_index: 3,
-            created_at: new Date().toISOString()
-          }
-        );
+          }));
+          await supabaseAdmin.from('course_stages').insert(stageRows);
+        }
 
-        saveDb(db);
         return NextResponse.json({ success: true, course: newCourse });
       }
 
       case 'admin:update-course': {
-        const user = getSessionUser();
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
-        const { id, title, subtitle, description, price, duration, level, category_id, thumbnail_url, is_active } = payload;
-        const match = db.courses.find(c => c.id === id);
+        const { id, title, subtitle, description, price, duration, level, category_id, is_active } = payload;
+        const { data: updated, error } = await supabaseAdmin
+          .from('courses')
+          .update({ title, subtitle, description, price, duration, level, category_id, is_active, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .select()
+          .single();
 
-        if (match) {
-          if (title !== undefined) match.title = title;
-          if (subtitle !== undefined) match.subtitle = subtitle;
-          if (description !== undefined) match.description = description;
-          if (price !== undefined) match.price = Number(price);
-          if (duration !== undefined) match.duration = duration;
-          if (level !== undefined) match.level = level;
-          if (category_id !== undefined) match.category_id = category_id;
-          if (thumbnail_url !== undefined) match.thumbnail_url = thumbnail_url;
-          if (is_active !== undefined) match.is_active = is_active;
-          
-          match.updated_at = new Date().toISOString();
-          saveDb(db);
-        }
-
-        return NextResponse.json({ success: true, course: match });
+        if (error) throw error;
+        return NextResponse.json({ success: true, course: updated });
       }
 
-      case 'admin:create-category': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const { name, description, icon } = payload;
-        const newCat: Category = {
-          id: `cat-${Date.now()}`,
-          name,
-          description,
-          icon: icon || 'Code',
-          created_at: new Date().toISOString()
-        };
-
-        db.categories.push(newCat);
-        saveDb(db);
-
-        return NextResponse.json({ success: true, category: newCat });
-      }
-
-      case 'admin:get-certificates-report': {
-        const user = getSessionUser();
-        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
-
-        const certificatesExtended = db.certificates.map(cert => {
-          const enroll = db.enrollments.find(e => e.id === cert.enrollment_id);
-          const student = db.profiles.find(p => p.id === enroll?.student_id);
-          const course = db.courses.find(c => c.id === enroll?.course_id);
-
-          return {
-            ...cert,
-            student_name: student?.full_name || 'Deleted Student',
-            student_email: student?.email || 'N/A',
-            course_title: course?.title || 'Deleted Course'
-          };
-        });
-
-        return NextResponse.json({ certificates: certificatesExtended });
-      }
-
-      // --- STAGE LEVEL MANIPULATIONS ---
-      case 'admin:create-stage':
-      case 'admin:add-stage': {
-        const user = getSessionUser();
+      case 'admin:create-stage': {
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
         const { course_id, title, description } = payload;
-        const courseStages = db.course_stages.filter(s => s.course_id === course_id);
-        const order_index = courseStages.length + 1;
+        const { data: existingStages } = await supabaseAdmin.from('course_stages').select('id', { count: 'exact' }).eq('course_id', course_id);
+        const order_index = (existingStages?.length || 0) + 1;
 
-        const newStage: CourseStage = {
+        const { data: newStage, error } = await supabaseAdmin.from('course_stages').insert([{
           id: `stage-${course_id}-${Date.now()}`,
           course_id,
           title,
           description,
           order_index,
           created_at: new Date().toISOString()
-        };
+        }]).select().single();
 
-        db.course_stages.push(newStage);
-        saveDb(db);
-
+        if (error) throw error;
         return NextResponse.json({ success: true, stage: newStage });
       }
 
-      case 'admin:delete-stage': {
-        const user = getSessionUser();
+      case 'admin:issue-certificate': {
+        const user = await getSessionUser();
         if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
 
-        const { id } = payload;
-        db.course_stages = db.course_stages.filter(s => s.id !== id);
-        
-        // delete progress associated with it
-        db.progress = db.progress.filter(p => p.stage_id !== id);
-        saveDb(db);
+        const { student_id, course_id } = payload;
+        let { data: enroll } = await supabaseAdmin.from('enrollments').select('id').eq('student_id', student_id).eq('course_id', course_id).single();
 
+        if (!enroll) {
+          const { data: newEnroll } = await supabaseAdmin.from('enrollments').insert([{
+            id: `enroll-${Date.now()}`,
+            student_id,
+            course_id,
+            status: 'active',
+            payment_status: 'free',
+            enrolled_at: new Date().toISOString()
+          }]).select().single();
+          enroll = newEnroll;
+        }
+
+        if (!enroll) return NextResponse.json({ error: 'Failed to find/create enrollment' });
+
+        const { data: totalCerts } = await supabaseAdmin.from('certificates').select('id', { count: 'exact' });
+        const serialNum = String((totalCerts?.length || 0) + 124).padStart(5, '0');
+        const uniqueCode = `DTN-${new Date().getFullYear()}-${serialNum}`;
+
+        const { data: newCert, error: certError } = await supabaseAdmin.from('certificates').insert([{
+          id: `cert-${Date.now()}`,
+          enrollment_id: enroll.id,
+          issued_at: new Date().toISOString(),
+          unique_code: uniqueCode
+        }]).select().single();
+
+        if (certError) throw certError;
+
+        await supabaseAdmin.from('enrollments').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', enroll.id);
+
+        return NextResponse.json({ success: true, unique_code: uniqueCode });
+      }
+
+      case 'admin:delete-registration': {
+        const user = await getSessionUser();
+        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+        const { id } = payload;
+        await supabaseAdmin.from('registrations').delete().eq('id', id);
+        return NextResponse.json({ success: true });
+      }
+
+      case 'admin:manual-complete-stage': {
+        const user = await getSessionUser();
+        if (!user || user.role !== 'admin') return NextResponse.json({ error: 'Access Denied' }, { status: 403 });
+
+        const { enrollment_id, stage_id, completed } = payload;
+        const nowStr = new Date().toISOString();
+
+        const { data: existingProg } = await supabaseAdmin
+          .from('progress')
+          .select('id')
+          .eq('enrollment_id', enrollment_id)
+          .eq('stage_id', stage_id)
+          .single();
+
+        if (existingProg) {
+          await supabaseAdmin.from('progress')
+            .update({ completed, completed_at: completed ? nowStr : null })
+            .eq('id', existingProg.id);
+        } else {
+          await supabaseAdmin.from('progress').insert([{
+            id: `prog-${Date.now()}`,
+            enrollment_id,
+            stage_id,
+            completed,
+            completed_at: completed ? nowStr : null
+          }]);
+        }
         return NextResponse.json({ success: true });
       }
 
