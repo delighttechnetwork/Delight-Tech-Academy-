@@ -1796,19 +1796,60 @@ export default function AdminDashboard() {
                               </span>
                             </td>
                             <td className="p-4 text-center">
-                              {reg.source === 'website' ? (
+                              <div className="flex items-center justify-center gap-2">
+                                {reg.source === 'website' ? (
+                                  <button
+                                    onClick={() => handleApproveAndEnrollReg(reg.id)}
+                                    className="flex items-center gap-1 bg-[#111e40] border border-cyan-400/20 text-cyan-400 text-[11px] font-bold px-3 py-1.5 rounded-lg hover:bg-cyan-400 hover:text-[#0A1228] transition-all cursor-pointer"
+                                  >
+                                    <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                                    Approve & Enroll
+                                  </button>
+                                ) : isNewsletter ? (
+                                  <span className="text-emerald-500/80 bg-emerald-500/5 px-2 py-1 rounded text-[10px] font-semibold border border-emerald-500/10 inline-block font-mono">Subscribed ✓</span>
+                                ) : (
+                                  <span className="text-gray-500 text-[10px] uppercase font-mono tracking-wider">Contact Form</span>
+                                )}
+
                                 <button
-                                  onClick={() => handleApproveAndEnrollReg(reg.id)}
-                                  className="mx-auto flex items-center gap-1 bg-[#111e40] border border-cyan-400/20 text-cyan-400 text-[11px] font-bold px-3 py-1.5 rounded-lg hover:bg-cyan-400 hover:text-[#0A1228] transition-all cursor-pointer"
+                                  onClick={() => {
+                                    setConfirmModal({
+                                      isOpen: true,
+                                      title: 'Delete Inquiry',
+                                      message: `Are you sure you want to permanently delete this ${reg.source} inquiry from ${reg.full_name}?`,
+                                      confirmText: 'Delete',
+                                      cancelText: 'Cancel',
+                                      type: 'danger',
+                                      onConfirm: async () => {
+                                        try {
+                                          const res = await fetch('/api/db', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({
+                                              action: 'admin:delete-registration',
+                                              payload: { id: reg.id }
+                                            })
+                                          });
+                                          const data = await res.json();
+                                          if (data.error) triggerFeedbacks(data.error, true);
+                                          else {
+                                            triggerFeedbacks('Inquiry deleted successfully.');
+                                            await fetchAdminConsoleState();
+                                          }
+                                        } catch {
+                                          triggerFeedbacks('Network error deleting inquiry.', true);
+                                        } finally {
+                                          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                                        }
+                                      }
+                                    });
+                                  }}
+                                  className="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete inquiry"
                                 >
-                                  <UserCheck className="h-3.5 w-3.5 shrink-0" />
-                                  Approve & Enroll
+                                  <Trash2 className="h-4 w-4" />
                                 </button>
-                              ) : isNewsletter ? (
-                                <span className="text-emerald-500/80 bg-emerald-500/5 px-2 py-1 rounded text-[10px] font-semibold border border-emerald-500/10 inline-block font-mono">Subscribed ✓</span>
-                              ) : (
-                                <span className="text-gray-500 text-[10px] uppercase font-mono tracking-wider">Contact Form</span>
-                              )}
+                              </div>
                             </td>
                           </tr>
                         );
