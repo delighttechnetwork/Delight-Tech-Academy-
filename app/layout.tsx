@@ -13,6 +13,9 @@ const poppins = Poppins({
 export const metadata: Metadata = {
   title: 'Delight Tech Network Academy — Learn. Build. Launch.',
   description: 'Nigeria\'s Premier Tech Academy in Ibadan, Oyo State — Lighting Through Technology. Hands-on practical graphics design, full-stack web development, prompt engineering, cyber security, and video animation coaching.',
+  icons: {
+    icon: '/api/favicon',
+  },
 };
 
 export default function RootLayout({
