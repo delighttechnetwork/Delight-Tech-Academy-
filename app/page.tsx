@@ -162,7 +162,7 @@ export default function HomePage() {
         <div className="absolute bottom-1/4 right-1/4 h-96 w-96 rounded-full bg-[#FFC430]/[0.03] dark:bg-[#FFC430]/5 blur-3xl animate-pulse-glow" style={{ animationDelay: '2s' }} />
 
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center">
-          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-400/5 px-4 py-1.5 text-xs font-semibold text-cyan-300 font-mono mb-8 backdrop-blur-sm animate-pulse">
+          <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/25 bg-cyan-400/5 px-4 py-1.5 text-xs font-semibold text-black dark:text-cyan-300 font-mono mb-8 backdrop-blur-sm animate-pulse">
             <span className="flex h-2 w-2 rounded-full bg-cyan-400 animate-ping" />
             Admissions Open — July 2026 Batches
           </div>
@@ -294,7 +294,7 @@ export default function HomePage() {
               whileInView={{ opacity: 1, y: 0, scale: 1 }}
               viewport={{ once: false, margin: "-80px" }}
               transition={{ duration: 0.6, delay: (index % 3) * 0.15, ease: "easeOut" }}
-              className="group relative rounded-2xl border border-border-brand bg-card-brand p-6 hover:border-cyan-400/30 transition-all duration-350 hover:-translate-y-1 flex flex-col justify-between"
+              className="group relative rounded-2xl border border-border-brand bg-card-brand p-6 hover:border-cyan-400/30 transition-all duration-350 hover:-translate-y-1 flex flex-col justify-between overflow-hidden"
             >
               {/* Highlight bar hover effect */}
               <div className="absolute top-0 left-0 right-0 h-1 rounded-t-2xl bg-cyan-400 scale-x-0 group-hover:scale-x-100 transition-all origin-left duration-300" />
@@ -466,7 +466,7 @@ export default function HomePage() {
             whileInView={{ opacity: 1, y: 0, scale: 1 }}
             viewport={{ once: false, margin: "-80px" }}
             transition={{ duration: 0.6, type: "spring", stiffness: 90 }}
-            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors"
+            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors overflow-hidden"
           >
             <div className="h-10 w-10 flex items-center justify-center rounded-lg bg-cyan-400/5 text-cyan-300">
               <Code className="h-6 w-6 stroke-2" />
@@ -482,7 +482,7 @@ export default function HomePage() {
             whileInView={{ opacity: 1, y: 0, scale: 1 }}
             viewport={{ once: false, margin: "-80px" }}
             transition={{ duration: 0.6, delay: 0.15, type: "spring", stiffness: 90 }}
-            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors"
+            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors overflow-hidden"
           >
             <div className="h-10 w-10 flex items-center justify-center rounded-lg bg-yellow-400/5 text-yellow-300">
               <Award className="h-6 w-6 stroke-2" />
@@ -498,7 +498,7 @@ export default function HomePage() {
             whileInView={{ opacity: 1, y: 0, scale: 1 }}
             viewport={{ once: false, margin: "-80px" }}
             transition={{ duration: 0.6, delay: 0.3, type: "spring", stiffness: 90 }}
-            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors"
+            className="rounded-2xl border border-border-brand bg-card-brand p-6 space-y-4 hover:bg-card-brand-hover transition-colors overflow-hidden"
           >
             <div className="h-10 w-10 flex items-center justify-center rounded-lg bg-emerald-400/5 text-emerald-300">
               <CheckCircle className="h-6 w-6 stroke-2" />
@@ -520,7 +520,7 @@ export default function HomePage() {
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
-            className="rounded-2xl border border-border-brand bg-card-brand p-8 sm:p-12 grid grid-cols-1 md:grid-cols-5 gap-10 items-center hover:bg-card-brand-hover transition-colors duration-300"
+            className="rounded-2xl border border-border-brand bg-card-brand p-8 sm:p-12 grid grid-cols-1 md:grid-cols-5 gap-10 items-center hover:bg-card-brand-hover transition-colors duration-300 overflow-hidden"
           >
             
             <div className="md:col-span-2 flex justify-center">
@@ -614,7 +614,7 @@ export default function HomePage() {
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="relative rounded-2xl border border-border-brand bg-card-brand p-8 sm:p-12 shadow-xl hover:bg-card-brand-hover transition-colors duration-300"
+          className="relative rounded-2xl border border-border-brand bg-card-brand p-8 sm:p-12 shadow-xl hover:bg-card-brand-hover transition-colors duration-300 overflow-hidden"
         >
           <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8 mb-6">
             <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full overflow-hidden shrink-0 border-2 border-cyan-400 bg-bg-brand">

@@ -171,7 +171,7 @@ export default function AboutPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.1 }}
-                className="p-8 rounded-3xl bg-card-brand border border-border-brand hover:border-cyan-400/30 transition-colors"
+                className="p-8 rounded-3xl bg-card-brand border border-border-brand hover:border-cyan-400/30 transition-colors overflow-hidden"
               >
                 <div className="h-12 w-12 rounded-2xl bg-cyan-400/10 flex items-center justify-center text-cyan-400 mx-auto mb-4">
                   <stat.icon className="h-6 w-6" />
